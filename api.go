@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // prodoctorovBase подменяется в тестах.
@@ -144,9 +145,16 @@ func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
 	return free, nil
 }
 
+// truncate обрезает s до не более n байт, сохраняя валидность UTF-8
+// (обрезка до границы руны) — иначе Telegram отклонит сообщение
+// с разорванной посреди руны кириллицей.
 func truncate(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
 	}
 	return s
 }

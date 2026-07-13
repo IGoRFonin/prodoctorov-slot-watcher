@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -24,14 +25,14 @@ type state struct {
 	CachedDoctor  *DoctorInfo `json:"cached_doctor,omitempty"`
 }
 
-const stateFile = "state.json"
+const stateFileName = "state.json"
 
 // errAlertThreshold — после скольких подряд неудачных опросов слать алерт.
 const errAlertThreshold = 3
 
 func loadState() state {
 	var s state
-	if b, err := os.ReadFile(stateFile); err == nil {
+	if b, err := os.ReadFile(filepath.Join(baseDir(), stateFileName)); err == nil {
 		_ = json.Unmarshal(b, &s)
 	}
 	return s
@@ -39,7 +40,36 @@ func loadState() state {
 
 func saveState(s state) {
 	b, _ := json.MarshalIndent(s, "", "  ")
-	_ = os.WriteFile(stateFile, b, 0644)
+	if err := os.WriteFile(filepath.Join(baseDir(), stateFileName), b, 0644); err != nil {
+		log.Printf("не удалось сохранить state.json: %v", err)
+	}
+}
+
+// digestMessage — текст ежедневной сводки. ok=false, если последний опрос не удался.
+func digestMessage(doc DoctorInfo, slots []freeSlot, ok bool, lastOK int64, clinics map[int]Clinic) string {
+	lastOKLine := ""
+	if lastOK > 0 {
+		lastOKLine = time.Unix(lastOK, 0).Format("02.01.2006 15:04")
+	}
+	if !ok {
+		msg := fmt.Sprintf("📋 Ежедневная сводка\n%s\nНе удалось получить данные с сайта — возможно, сайт недоступен. ", doc.Name)
+		if lastOKLine != "" {
+			msg += fmt.Sprintf("Последний успешный опрос: %s.", lastOKLine)
+		} else {
+			msg += "Успешных опросов ещё не было."
+		}
+		return msg
+	}
+	var msg string
+	if len(slots) > 0 {
+		msg = fmt.Sprintf("📋 Ежедневная сводка\n%s\nСвободные слоты:\n%s", doc.Name, formatSlots(slots, clinics))
+	} else {
+		msg = fmt.Sprintf("📋 Ежедневная сводка\n%s\nСвободных слотов нет. Бот работает, слежу дальше.", doc.Name)
+	}
+	if lastOKLine != "" {
+		msg += fmt.Sprintf("\nПоследний успешный опрос: %s", lastOKLine)
+	}
+	return msg
 }
 
 // digestDue — пора ли слать ежедневную сводку: сегодня ещё не слали
@@ -95,8 +125,8 @@ func main() {
 	log.Printf("watcher старт: %s (id %d), клиник: %d, опрос каждые %d мин, сводка в %s",
 		doc.Name, doc.DoctorID, len(doc.Clinics), cfg.PollMinutes, cfg.DigestTime)
 
-	// poll возвращает свободные слоты (nil при ошибке опроса).
-	poll := func() []freeSlot {
+	// poll возвращает свободные слоты и ok=false при ошибке опроса.
+	poll := func() ([]freeSlot, bool) {
 		slots, err := fetchSlots(client, doc)
 		if err != nil {
 			st.ConsecErrors++
@@ -109,13 +139,16 @@ func main() {
 				}
 			}
 			saveState(st)
-			return nil
+			return nil, false
 		}
 		if st.ErrAlerted {
-			_ = bot.sendMessage(cfg.TelegramChatID, "✅ Мониторинг восстановлен, данные снова приходят.")
+			// Сбрасываем флаг, только если удалось сообщить о восстановлении —
+			// иначе рискуем молча потерять единственный шанс предупредить.
+			if e := bot.sendMessage(cfg.TelegramChatID, "✅ Мониторинг восстановлен, данные снова приходят."); e == nil {
+				st.ErrAlerted = false
+			}
 		}
 		st.ConsecErrors = 0
-		st.ErrAlerted = false
 		st.LastOK = time.Now().Unix()
 		log.Printf("опрос ок: свободных слотов=%d", len(slots))
 
@@ -135,25 +168,21 @@ func main() {
 			st.LastNotifSig = ""
 		}
 		saveState(st)
-		return slots
+		return slots, true
 	}
 
-	runDigest := func(slots []freeSlot) {
-		var msg string
-		if len(slots) > 0 {
-			msg = fmt.Sprintf("📋 Ежедневная сводка\n%s\nСвободные слоты:\n%s", doc.Name, formatSlots(slots, clinics))
-		} else {
-			msg = fmt.Sprintf("📋 Ежедневная сводка\n%s\nСвободных слотов нет. Бот работает, слежу дальше.", doc.Name)
-		}
+	runDigest := func(slots []freeSlot, ok bool) {
+		msg := digestMessage(doc, slots, ok, st.LastOK, clinics)
+		// Сводку шлём и при !ok — пользователь должен узнать о проблеме.
 		if err := bot.sendMessage(cfg.TelegramChatID, msg); err == nil {
 			st.LastDigestDay = time.Now().Format("2006-01-02")
 			saveState(st)
 		}
 	}
 
-	slots := poll() // сразу при старте
+	slots, ok := poll() // сразу при старте
 	if digestDue(time.Now(), st.LastDigestDay, cfg.DigestTime) {
-		runDigest(slots)
+		runDigest(slots, ok)
 	}
 
 	pollTicker := time.NewTicker(time.Duration(cfg.PollMinutes) * time.Minute)

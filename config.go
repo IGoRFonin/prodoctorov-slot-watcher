@@ -5,10 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
-const configFile = "config.json"
+const configFileName = "config.json"
+
+// baseDir — папка, где лежит бинарник; config.json и state.json живут рядом
+// с программой, а не в текущей директории (важно при автозапуске).
+func baseDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(exe)
+}
 
 // Config — настройки пользователя, лежат в config.json рядом с программой.
 type Config struct {
@@ -23,7 +34,7 @@ var errNoConfig = errors.New("config.json не найден")
 
 func loadConfig() (Config, error) {
 	var c Config
-	b, err := os.ReadFile(configFile)
+	b, err := os.ReadFile(filepath.Join(baseDir(), configFileName))
 	if os.IsNotExist(err) {
 		return c, errNoConfig
 	}
@@ -60,7 +71,7 @@ func (c Config) validate() error {
 
 func saveConfig(c Config) error {
 	b, _ := json.MarshalIndent(c, "", "  ")
-	return os.WriteFile(configFile, b, 0600)
+	return os.WriteFile(filepath.Join(baseDir(), configFileName), b, 0600)
 }
 
 // validHHMM — строгая проверка времени "ЧЧ:ММ" (ровно две цифры и там, и там).

@@ -68,6 +68,9 @@ func parseDoctorPage(pageHTML string, doctorID int) (DoctorInfo, error) {
 		}
 		info.Name = strings.TrimSpace(t)
 	}
+	if info.Name == "" {
+		info.Name = fmt.Sprintf("врач %d", doctorID)
+	}
 
 	// Блок doctorsLpus: тройки doctor_id/lpu_id/lpu_timedelta.
 	// На странице бывают блоки других врачей — фильтруем по doctorID.

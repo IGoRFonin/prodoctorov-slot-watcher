@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSignatureAndFormat(t *testing.T) {
@@ -31,6 +32,24 @@ func TestSignatureAndFormat(t *testing.T) {
 	}
 	if !strings.Contains(msg, "https://x/") {
 		t.Errorf("в уведомлении нет ссылки на врача: %q", msg)
+	}
+}
+
+func TestTruncateUTF8Boundary(t *testing.T) {
+	s := "Тонян Иосиф Павлович"
+	got := truncate(s, 5) // режет ровно посреди кириллической руны
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncate вернул невалидный UTF-8: %q", got)
+	}
+	if !strings.HasPrefix(s, got) {
+		t.Fatalf("truncate не является префиксом исходной строки: %q", got)
+	}
+}
+
+func TestTruncateShortASCIIUnchanged(t *testing.T) {
+	s := "hello"
+	if got := truncate(s, 100); got != s {
+		t.Fatalf("truncate изменил строку короче n: %q", got)
 	}
 }
 

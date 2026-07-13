@@ -48,7 +48,7 @@
 ## Установка вручную
 
 1. Установите [Go](https://go.dev/dl/) 1.23+.
-2. `git clone <адрес репозитория> && cd slot-watcher`
+2. `git clone <адрес репозитория> && cd prodoctorov-slot-watcher`
 3. `go build -o watcher .`
 4. `./watcher` — при первом запуске мастер задаст 5 вопросов:
    ссылка на врача → токен бота (создаётся у @BotFather) → сообщение боту
