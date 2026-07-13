@@ -42,7 +42,7 @@ var lastGoodToken string
 func getCSRF(c *http.Client, pageURL string) (string, error) {
 	u, err := url.Parse(pageURL)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("некорректный адрес страницы врача: %w", err)
 	}
 	base := &url.URL{Scheme: u.Scheme, Host: u.Host}
 	var lastErr error
@@ -73,9 +73,12 @@ func getCSRF(c *http.Client, pageURL string) (string, error) {
 
 // fetchSlots опрашивает API и возвращает все свободные слоты врача.
 func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
+	if len(doc.Clinics) == 0 {
+		return nil, fmt.Errorf("у врача не найдено ни одной клиники — нечего опрашивать")
+	}
 	csrf, err := getCSRF(c, doc.URL)
 	if err != nil {
-		return nil, fmt.Errorf("csrf: %w", err)
+		return nil, fmt.Errorf("не удалось получить csrf-токен: %w", err)
 	}
 
 	type dl struct {
@@ -119,7 +122,7 @@ func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
 
 	var sr slotsResponse
 	if err := json.Unmarshal(raw, &sr); err != nil {
-		return nil, fmt.Errorf("parse: %w; body=%s", err, truncate(string(raw), 200))
+		return nil, fmt.Errorf("не удалось разобрать ответ API: %w; тело=%s", err, truncate(string(raw), 200))
 	}
 
 	var free []freeSlot
