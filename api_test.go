@@ -35,6 +35,42 @@ func TestSignatureAndFormat(t *testing.T) {
 	}
 }
 
+func TestFormatSlotsGrouping(t *testing.T) {
+	// Одна клиника, несколько дней: название клиники — один раз в шапке,
+	// каждый день одной строкой «дата — времена».
+	slots := []freeSlot{
+		{Lpu: 70382, Date: "2026-07-16", Time: "16:00"},
+		{Lpu: 70382, Date: "2026-07-16", Time: "18:00"},
+		{Lpu: 70382, Date: "2026-07-17", Time: "15:00"},
+	}
+	clinics := map[int]Clinic{
+		70382: {LpuID: 70382, Name: "Стоматология «ПрезиДент»"},
+	}
+	out := formatSlots(slots, clinics)
+	if n := strings.Count(out, "Стоматология «ПрезиДент»"); n != 1 {
+		t.Errorf("название клиники должно встречаться один раз, встретилось %d раз: %q", n, out)
+	}
+	if !strings.Contains(out, "🏥 Стоматология «ПрезиДент»") {
+		t.Errorf("нет заголовка клиники: %q", out)
+	}
+	if !strings.Contains(out, "16 июля, чт — 16:00, 18:00") {
+		t.Errorf("день не в одну строку с временами: %q", out)
+	}
+	if !strings.Contains(out, "17 июля, пт — 15:00") {
+		t.Errorf("нет второго дня: %q", out)
+	}
+
+	// Несколько клиник: каждая своим блоком, название не дублируется.
+	multi := []freeSlot{
+		{Lpu: 70382, Date: "2026-07-16", Time: "16:00"},
+		{Lpu: 99990, Date: "2026-07-16", Time: "09:30"},
+	}
+	out = formatSlots(multi, clinics)
+	if strings.Count(out, "🏥") != 2 {
+		t.Errorf("ожидались два блока клиник: %q", out)
+	}
+}
+
 func TestTruncateUTF8Boundary(t *testing.T) {
 	s := "Хафез Йамен Мухаммадович"
 	got := truncate(s, 5) // режет ровно посреди кириллической руны

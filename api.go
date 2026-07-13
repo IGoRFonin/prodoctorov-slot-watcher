@@ -192,32 +192,36 @@ func humanDate(d string) string {
 	return fmt.Sprintf("%d %s, %s", t.Day(), ruMonths[t.Month()], ruWeekdays[t.Weekday()])
 }
 
-// formatSlots — слоты, сгруппированные сначала по дате, внутри — по клинике.
-// Внутри клиники все времена в одну строку через запятую, чтобы название
-// клиники не повторялось у каждого слота.
+// formatSlots — слоты, сгруппированные сначала по клинике, внутри — по дате.
+// Название клиники выносится в заголовок блока один раз, а не повторяется у
+// каждого дня: при одной клинике сообщение читается как компактный список
+// дней, при нескольких — как отдельные блоки. Каждый день — одна строка
+// «дата — времена через запятую».
 func formatSlots(slots []freeSlot, clinics map[int]Clinic) string {
-	byDate := map[string][]freeSlot{}
-	var dates []string
+	// Группируем по клинике (в порядке появления), внутри — по дате.
+	byClinic := map[int]map[string][]string{}
+	var clinicOrder []int
 	for _, s := range slots {
-		if _, ok := byDate[s.Date]; !ok {
-			dates = append(dates, s.Date)
+		if _, ok := byClinic[s.Lpu]; !ok {
+			byClinic[s.Lpu] = map[string][]string{}
+			clinicOrder = append(clinicOrder, s.Lpu)
 		}
-		byDate[s.Date] = append(byDate[s.Date], s)
+		byClinic[s.Lpu][s.Date] = append(byClinic[s.Lpu][s.Date], s.Time)
 	}
-	sort.Strings(dates)
 	var b strings.Builder
-	for _, d := range dates {
-		fmt.Fprintf(&b, "📅 %s\n", humanDate(d))
-		byClinic := map[int][]string{}
-		var order []int
-		for _, s := range byDate[d] {
-			if _, ok := byClinic[s.Lpu]; !ok {
-				order = append(order, s.Lpu)
-			}
-			byClinic[s.Lpu] = append(byClinic[s.Lpu], s.Time)
+	for i, lpu := range clinicOrder {
+		if i > 0 {
+			b.WriteString("\n")
 		}
-		for _, lpu := range order {
-			fmt.Fprintf(&b, "   🕐 %s — %s\n", strings.Join(byClinic[lpu], ", "), clinicLabel(lpu, clinics))
+		fmt.Fprintf(&b, "🏥 %s\n", clinicLabel(lpu, clinics))
+		byDate := byClinic[lpu]
+		dates := make([]string, 0, len(byDate))
+		for d := range byDate {
+			dates = append(dates, d)
+		}
+		sort.Strings(dates)
+		for _, d := range dates {
+			fmt.Fprintf(&b, "%s — %s\n", humanDate(d), strings.Join(byDate[d], ", "))
 		}
 	}
 	return b.String()
