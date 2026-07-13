@@ -6,7 +6,7 @@ func validTestConfig() Config {
 	return Config{
 		TelegramBotToken: "123:abc",
 		TelegramChatID:   "42",
-		DoctorURL:        "https://prodoctorov.ru/zelenograd/vrach/304702-tonyan/",
+		DoctorURL:        "https://prodoctorov.ru/moskva/vrach/975987-hafez/",
 		PollMinutes:      20,
 		DigestTime:       "09:00",
 	}

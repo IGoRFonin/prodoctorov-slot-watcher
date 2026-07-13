@@ -36,7 +36,7 @@ func TestSignatureAndFormat(t *testing.T) {
 }
 
 func TestTruncateUTF8Boundary(t *testing.T) {
-	s := "Тонян Иосиф Павлович"
+	s := "Хафез Йамен Мухаммадович"
 	got := truncate(s, 5) // режет ровно посреди кириллической руны
 	if !utf8.ValidString(got) {
 		t.Fatalf("truncate вернул невалидный UTF-8: %q", got)
@@ -62,7 +62,7 @@ func TestFetchSlots(t *testing.T) {
 		if got := r.Header.Get("X-CSRFToken"); got != "tok123" {
 			t.Errorf("X-CSRFToken = %q, ожидалось tok123", got)
 		}
-		w.Write([]byte(`{"result":[{"doctor_id":304702,"lpu_id":70382,"slots":{"2026-07-30":[{"time":"08:00","free":true,"duration":30},{"time":"09:00","free":false,"duration":30}]}}]}`))
+		w.Write([]byte(`{"result":[{"doctor_id":975987,"lpu_id":70382,"slots":{"2026-07-30":[{"time":"08:00","free":true,"duration":30},{"time":"09:00","free":false,"duration":30}]}}]}`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -72,8 +72,8 @@ func TestFetchSlots(t *testing.T) {
 	defer func() { prodoctorovBase = oldBase }()
 
 	doc := DoctorInfo{
-		DoctorID: 304702,
-		URL:      srv.URL + "/vrach/304702-test/",
+		DoctorID: 975987,
+		URL:      srv.URL + "/vrach/975987-test/",
 		Clinics:  []Clinic{{LpuID: 70382, Timedelta: 3}},
 	}
 	slots, err := fetchSlots(newHTTPClient(), doc)

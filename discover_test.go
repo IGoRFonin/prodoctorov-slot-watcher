@@ -7,11 +7,11 @@ import (
 )
 
 func TestExtractDoctorID(t *testing.T) {
-	id, err := extractDoctorID("https://prodoctorov.ru/zelenograd/vrach/304702-tonyan/")
-	if err != nil || id != 304702 {
-		t.Fatalf("got id=%d err=%v, ожидалось 304702", id, err)
+	id, err := extractDoctorID("https://prodoctorov.ru/moskva/vrach/975987-hafez/")
+	if err != nil || id != 975987 {
+		t.Fatalf("got id=%d err=%v, ожидалось 975987", id, err)
 	}
-	if _, err := extractDoctorID("https://prodoctorov.ru/zelenograd/"); err == nil {
+	if _, err := extractDoctorID("https://prodoctorov.ru/moskva/"); err == nil {
 		t.Fatal("ожидалась ошибка для ссылки без /vrach/<id>-")
 	}
 }
@@ -21,11 +21,11 @@ func TestParseDoctorPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := parseDoctorPage(string(b), 304702)
+	info, err := parseDoctorPage(string(b), 975987)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Name != "Тонян Иосиф Павлович" {
+	if info.Name != "Хафез Йамен Мухаммадович" {
 		t.Errorf("имя врача: %q", info.Name)
 	}
 	if len(info.Clinics) != 2 {

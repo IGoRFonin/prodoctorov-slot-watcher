@@ -45,7 +45,7 @@ func newHTTPClient() *http.Client {
 }
 
 // extractDoctorID достаёт ID врача из ссылки вида
-// https://prodoctorov.ru/zelenograd/vrach/304702-tonyan/
+// https://prodoctorov.ru/moskva/vrach/975987-hafez/
 func extractDoctorID(doctorURL string) (int, error) {
 	m := reDoctorID.FindStringSubmatch(doctorURL)
 	if m == nil {
@@ -60,7 +60,7 @@ func extractDoctorID(doctorURL string) (int, error) {
 func parseDoctorPage(pageHTML string, doctorID int) (DoctorInfo, error) {
 	info := DoctorInfo{DoctorID: doctorID}
 
-	// Имя врача — из <title>: "Тонян Иосиф Павлович, стоматолог - ...".
+	// Имя врача — из <title>: "Хафез Йамен Мухаммадович, стоматолог - ...".
 	if m := reTitle.FindStringSubmatch(pageHTML); m != nil {
 		t := html.UnescapeString(m[1])
 		if i := strings.IndexAny(t, ",|"); i > 0 {
