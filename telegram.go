@@ -13,6 +13,10 @@ import (
 // telegramAPIBase подменяется в тестах.
 var telegramAPIBase = "https://api.telegram.org"
 
+// tgHTTPClient — клиент с таймаутом, чтобы вызовы Telegram не зависали.
+// 40с покрывает long-poll getUpdates (timeout=10) с запасом.
+var tgHTTPClient = &http.Client{Timeout: 40 * time.Second}
+
 type tgBot struct{ token string }
 
 type tgResponse struct {
@@ -22,7 +26,7 @@ type tgResponse struct {
 }
 
 func (b tgBot) call(method string, form url.Values) (json.RawMessage, error) {
-	resp, err := http.PostForm(fmt.Sprintf("%s/bot%s/%s", telegramAPIBase, b.token, method), form)
+	resp, err := tgHTTPClient.PostForm(fmt.Sprintf("%s/bot%s/%s", telegramAPIBase, b.token, method), form)
 	if err != nil {
 		return nil, err
 	}
