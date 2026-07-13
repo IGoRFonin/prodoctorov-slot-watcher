@@ -1,0 +1,11 @@
+# личные данные пользователя
+config.json
+state.json
+
+# сборка
+watcher
+watcher.exe
+
+# рабочие файлы
+*.bak
+.DS_Store
