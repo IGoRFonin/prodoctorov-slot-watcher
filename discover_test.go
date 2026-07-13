@@ -28,8 +28,11 @@ func TestParseDoctorPage(t *testing.T) {
 	if info.Name != "Хафез Йамен Мухаммадович" {
 		t.Errorf("имя врача: %q", info.Name)
 	}
-	if len(info.Clinics) != 2 {
-		t.Fatalf("клиник: %d, ожидалось 2 (чужой врач отфильтрован)", len(info.Clinics))
+	// lpu-with-appointment-ids в тестовых данных = [70382]: мониторим только
+	// клиники этого врача с включённой онлайн-записью (99990 с выключенной —
+	// не в списке), чужой врач (39025) тоже отфильтрован.
+	if len(info.Clinics) != 1 {
+		t.Fatalf("клиник: %d, ожидалось 1 (только с включённой записью)", len(info.Clinics))
 	}
 	byID := map[int]Clinic{}
 	for _, c := range info.Clinics {
@@ -37,6 +40,9 @@ func TestParseDoctorPage(t *testing.T) {
 	}
 	if _, ok := byID[39025]; ok {
 		t.Error("клиника другого врача (lpu 39025) не отфильтрована")
+	}
+	if _, ok := byID[99990]; ok {
+		t.Error("клиника с выключенной онлайн-записью (lpu 99990) не должна мониториться")
 	}
 	c1, ok := byID[70382]
 	if !ok {

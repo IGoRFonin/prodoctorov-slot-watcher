@@ -33,11 +33,29 @@ type DoctorInfo struct {
 }
 
 var (
-	reDoctorID    = regexp.MustCompile(`/vrach/(\d+)-`)
-	reDoctorsLpus = regexp.MustCompile(`'doctor_id':\s*(\d+),\s*'lpu_id':\s*(\d+),\s*'lpu_timedelta':\s*(-?\d+)`)
-	reTitle       = regexp.MustCompile(`<title>([^<]+)</title>`)
-	reAddrList    = regexp.MustCompile(`:lpu-address-list="([^"]*)"`)
+	reDoctorID = regexp.MustCompile(`/vrach/(\d+)-`)
+	reTitle    = regexp.MustCompile(`<title>([^<]+)</title>`)
+	// Стабильные простые атрибуты компонента расписания.
+	reApptIDs = regexp.MustCompile(`lpu-with-appointment-ids="\[([^\]]*)\]"`)
+	reTownTD  = regexp.MustCompile(`town-timedelta="(-?\d+)"`)
+	reInt     = regexp.MustCompile(`-?\d+`)
+	// Полный JSON по клиникам — для названий/телефонов и как запасной список.
+	reAddrList = regexp.MustCompile(`:lpu-address-list="([^"]*)"`)
 )
+
+// addrEntry — одна запись из :lpu-address-list. Берём только то, что нужно
+// для уведомлений; вложенность минимальна, чтобы меньше зависеть от вёрстки.
+type addrEntry struct {
+	DoctorID int    `json:"doctor_id"`
+	LpuID    int    `json:"lpu_id"`
+	Phone    string `json:"phone"`
+	Lpu      struct {
+		Name string `json:"name"`
+		Town struct {
+			Timedelta int `json:"timedelta"`
+		} `json:"town"`
+	} `json:"lpu"`
+}
 
 func newHTTPClient() *http.Client {
 	jar, _ := cookiejar.New(nil)
@@ -55,8 +73,9 @@ func extractDoctorID(doctorURL string) (int, error) {
 	return id, nil
 }
 
-// parseDoctorPage разбирает HTML страницы врача: имя, клиники (lpu),
-// часовой пояс, названия и телефоны клиник.
+// parseDoctorPage разбирает HTML страницы врача: имя врача и список клиник
+// (id, название, телефон, часовой пояс). Список клиник берём из стабильного
+// атрибута lpu-with-appointment-ids, а названия/телефоны — из lpu-address-list.
 func parseDoctorPage(pageHTML string, doctorID int) (DoctorInfo, error) {
 	info := DoctorInfo{DoctorID: doctorID}
 
@@ -72,50 +91,63 @@ func parseDoctorPage(pageHTML string, doctorID int) (DoctorInfo, error) {
 		info.Name = fmt.Sprintf("врач %d", doctorID)
 	}
 
-	// Блок doctorsLpus: тройки doctor_id/lpu_id/lpu_timedelta.
-	// На странице бывают блоки других врачей — фильтруем по doctorID.
-	for _, m := range reDoctorsLpus.FindAllStringSubmatch(pageHTML, -1) {
-		did, _ := strconv.Atoi(m[1])
-		if did != doctorID {
-			continue
+	// Часовой пояс города — простой стабильный атрибут town-timedelta.
+	townTD := 0
+	if m := reTownTD.FindStringSubmatch(pageHTML); m != nil {
+		townTD, _ = strconv.Atoi(m[1])
+	}
+
+	// lpu-address-list — полный JSON по клиникам врача. Используем его для
+	// названий и телефонов, а также как запасной список id. Разбор
+	// best-effort: если сайт перекроит структуру, останутся заглушки, но
+	// мониторинг продолжит работать по стабильным атрибутам ниже.
+	byLpu := map[int]addrEntry{}
+	var addrOrder []int
+	if m := reAddrList.FindStringSubmatch(pageHTML); m != nil {
+		var entries []addrEntry
+		if err := json.Unmarshal([]byte(html.UnescapeString(m[1])), &entries); err == nil {
+			for _, e := range entries {
+				// На странице бывают клиники других врачей — фильтруем.
+				if e.DoctorID != doctorID {
+					continue
+				}
+				if _, ok := byLpu[e.LpuID]; !ok {
+					addrOrder = append(addrOrder, e.LpuID)
+				}
+				byLpu[e.LpuID] = e
+			}
 		}
-		lpu, _ := strconv.Atoi(m[2])
-		td, _ := strconv.Atoi(m[3])
-		info.Clinics = append(info.Clinics, Clinic{
-			LpuID:     lpu,
-			Name:      fmt.Sprintf("клиника %d", lpu),
-			Timedelta: td,
-		})
+	}
+
+	// Основной, стабильный источник списка клиник: массив id этого врача,
+	// где включена онлайн-запись.
+	var lpuIDs []int
+	if m := reApptIDs.FindStringSubmatch(pageHTML); m != nil {
+		for _, s := range reInt.FindAllString(m[1], -1) {
+			id, _ := strconv.Atoi(s)
+			lpuIDs = append(lpuIDs, id)
+		}
+	}
+	// Запасной источник: все клиники врача из lpu-address-list.
+	if len(lpuIDs) == 0 {
+		lpuIDs = addrOrder
+	}
+
+	for _, id := range lpuIDs {
+		c := Clinic{LpuID: id, Name: fmt.Sprintf("клиника %d", id), Timedelta: townTD}
+		if e, ok := byLpu[id]; ok {
+			if e.Lpu.Name != "" {
+				c.Name = e.Lpu.Name
+			}
+			c.Phone = e.Phone
+			if c.Timedelta == 0 {
+				c.Timedelta = e.Lpu.Town.Timedelta
+			}
+		}
+		info.Clinics = append(info.Clinics, c)
 	}
 	if len(info.Clinics) == 0 {
 		return info, fmt.Errorf("на странице не нашлось расписание врача %d — возможно, сайт изменил вёрстку", doctorID)
-	}
-
-	// Названия и телефоны клиник — из атрибута :lpu-address-list
-	// (HTML-экранированный JSON). Ошибки не фатальны: останутся
-	// названия-заглушки «клиника <id>».
-	if m := reAddrList.FindStringSubmatch(pageHTML); m != nil {
-		var entries []struct {
-			DoctorID int    `json:"doctor_id"`
-			LpuID    int    `json:"lpu_id"`
-			Phone    string `json:"phone"`
-			Lpu      struct {
-				Name string `json:"name"`
-			} `json:"lpu"`
-		}
-		if err := json.Unmarshal([]byte(html.UnescapeString(m[1])), &entries); err == nil {
-			for i := range info.Clinics {
-				for _, e := range entries {
-					if e.LpuID == info.Clinics[i].LpuID && e.DoctorID == doctorID {
-						if e.Lpu.Name != "" {
-							info.Clinics[i].Name = e.Lpu.Name
-						}
-						info.Clinics[i].Phone = e.Phone
-						break
-					}
-				}
-			}
-		}
 	}
 	return info, nil
 }
