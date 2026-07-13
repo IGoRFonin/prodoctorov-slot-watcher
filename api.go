@@ -175,7 +175,26 @@ func clinicLabel(lpu int, clinics map[int]Clinic) string {
 	return fmt.Sprintf("клиника %d", lpu)
 }
 
-// formatSlots — сообщение со слотами, сгруппированными по дате.
+var ruMonths = [...]string{"", "января", "февраля", "марта", "апреля", "мая", "июня",
+	"июля", "августа", "сентября", "октября", "ноября", "декабря"}
+
+var ruWeekdays = map[time.Weekday]string{
+	time.Monday: "пн", time.Tuesday: "вт", time.Wednesday: "ср",
+	time.Thursday: "чт", time.Friday: "пт", time.Saturday: "сб", time.Sunday: "вс",
+}
+
+// humanDate — «2026-07-28» → «28 июля, вт». При ошибке разбора возвращает исходную строку.
+func humanDate(d string) string {
+	t, err := time.Parse("2006-01-02", d)
+	if err != nil {
+		return d
+	}
+	return fmt.Sprintf("%d %s, %s", t.Day(), ruMonths[t.Month()], ruWeekdays[t.Weekday()])
+}
+
+// formatSlots — слоты, сгруппированные сначала по дате, внутри — по клинике.
+// Внутри клиники все времена в одну строку через запятую, чтобы название
+// клиники не повторялось у каждого слота.
 func formatSlots(slots []freeSlot, clinics map[int]Clinic) string {
 	byDate := map[string][]freeSlot{}
 	var dates []string
@@ -188,11 +207,18 @@ func formatSlots(slots []freeSlot, clinics map[int]Clinic) string {
 	sort.Strings(dates)
 	var b strings.Builder
 	for _, d := range dates {
-		var ts []string
+		fmt.Fprintf(&b, "📅 %s\n", humanDate(d))
+		byClinic := map[int][]string{}
+		var order []int
 		for _, s := range byDate[d] {
-			ts = append(ts, fmt.Sprintf("%s (%s)", s.Time, clinicLabel(s.Lpu, clinics)))
+			if _, ok := byClinic[s.Lpu]; !ok {
+				order = append(order, s.Lpu)
+			}
+			byClinic[s.Lpu] = append(byClinic[s.Lpu], s.Time)
 		}
-		fmt.Fprintf(&b, "📅 %s: %s\n", d, strings.Join(ts, ", "))
+		for _, lpu := range order {
+			fmt.Fprintf(&b, "   🕐 %s — %s\n", strings.Join(byClinic[lpu], ", "), clinicLabel(lpu, clinics))
+		}
 	}
 	return b.String()
 }
