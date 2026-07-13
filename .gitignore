@@ -9,3 +9,5 @@ watcher.exe
 # рабочие файлы
 *.bak
 .DS_Store
+.superpowers
+docs
