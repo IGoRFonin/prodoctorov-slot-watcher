@@ -25,6 +25,7 @@ func TestConfigValidate(t *testing.T) {
 		{"плохая ссылка", func(c *Config) { c.DoctorURL = "https://example.com/" }},
 		{"слишком частый опрос", func(c *Config) { c.PollMinutes = 5 }},
 		{"кривое время сводки", func(c *Config) { c.DigestTime = "25:99" }},
+		{"плохой прокси", func(c *Config) { c.ProxyURL = "ftp://host:21" }},
 	}
 	for _, tc := range cases {
 		c := validTestConfig()

@@ -13,11 +13,38 @@ import (
 // telegramAPIBase подменяется в тестах.
 var telegramAPIBase = "https://api.telegram.org"
 
-// tgHTTPClient — клиент с таймаутом, чтобы вызовы Telegram не зависали.
-// 40с покрывает long-poll getUpdates (timeout=10) с запасом.
+// tgHTTPClient — клиент с таймаутом по умолчанию (без прокси), чтобы вызовы
+// Telegram не зависали. 40с покрывает long-poll getUpdates (timeout=10) с запасом.
 var tgHTTPClient = &http.Client{Timeout: 40 * time.Second}
 
-type tgBot struct{ token string }
+// proxyTransport строит транспорт через прокси (http/https/socks5).
+// Пустой proxyURL → nil (прямое соединение). URL уже проверен validateProxyURL,
+// но при ошибке разбора возвращаем nil, а не падаем.
+func proxyTransport(proxyURL string) *http.Transport {
+	if proxyURL == "" {
+		return nil
+	}
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil
+	}
+	return &http.Transport{Proxy: http.ProxyURL(u)}
+}
+
+// newTelegramClient — клиент для Telegram с таймаутом и, если задан proxyURL,
+// маршрутизацией через прокси (Telegram часто недоступен напрямую в РФ).
+func newTelegramClient(proxyURL string) *http.Client {
+	c := &http.Client{Timeout: 40 * time.Second}
+	if tr := proxyTransport(proxyURL); tr != nil {
+		c.Transport = tr
+	}
+	return c
+}
+
+type tgBot struct {
+	token  string
+	client *http.Client // nil → tgHTTPClient (прямое соединение)
+}
 
 type tgResponse struct {
 	OK          bool            `json:"ok"`
@@ -26,7 +53,11 @@ type tgResponse struct {
 }
 
 func (b tgBot) call(method string, form url.Values) (json.RawMessage, error) {
-	resp, err := tgHTTPClient.PostForm(fmt.Sprintf("%s/bot%s/%s", telegramAPIBase, b.token, method), form)
+	cl := b.client
+	if cl == nil {
+		cl = tgHTTPClient
+	}
+	resp, err := cl.PostForm(fmt.Sprintf("%s/bot%s/%s", telegramAPIBase, b.token, method), form)
 	if err != nil {
 		return nil, err
 	}

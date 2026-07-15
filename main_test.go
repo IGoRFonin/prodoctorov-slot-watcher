@@ -1,10 +1,53 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
+
+// stubSender — отправитель-заглушка: возвращает заданную ошибку и помнит,
+// что попытка отправки была.
+type stubSender struct {
+	err    error
+	called bool
+}
+
+func (s *stubSender) sendMessage(chatID, text string) error {
+	s.called = true
+	return s.err
+}
+
+// Регрессия на «опрос каждую минуту»: если Telegram недоступен и сводка не
+// уходит, день всё равно должен отметиться отправленным — иначе digestDue
+// остаётся true и раскручивает опрос API до бана по частоте.
+func TestSendDigestMarksDayEvenOnSendFailure(t *testing.T) {
+	st := state{LastDigestDay: "2026-07-13"}
+	now := time.Date(2026, 7, 15, 9, 0, 0, 0, time.Local)
+	s := &stubSender{err: fmt.Errorf("telegram недоступен")}
+
+	sendDigest(s, "42", DoctorInfo{Name: "Врач"}, nil, true, &st, nil, now)
+
+	if !s.called {
+		t.Fatal("должны были попытаться отправить сводку")
+	}
+	if st.LastDigestDay != "2026-07-15" {
+		t.Fatalf("день сводки не отмечен при сбое отправки: %q", st.LastDigestDay)
+	}
+}
+
+func TestSendDigestMarksDayOnSuccess(t *testing.T) {
+	st := state{LastDigestDay: "2026-07-13"}
+	now := time.Date(2026, 7, 15, 9, 0, 0, 0, time.Local)
+	s := &stubSender{}
+
+	sendDigest(s, "42", DoctorInfo{Name: "Врач"}, nil, true, &st, nil, now)
+
+	if st.LastDigestDay != "2026-07-15" {
+		t.Fatalf("день сводки не отмечен при успешной отправке: %q", st.LastDigestDay)
+	}
+}
 
 func TestDigestMessage(t *testing.T) {
 	doc := DoctorInfo{Name: "Тестовый Врач"}

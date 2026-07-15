@@ -6,14 +6,10 @@ import (
 	"html"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
-
-const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 // Clinic — одна клиника врача.
 type Clinic struct {
@@ -55,11 +51,6 @@ type addrEntry struct {
 			Timedelta int `json:"timedelta"`
 		} `json:"town"`
 	} `json:"lpu"`
-}
-
-func newHTTPClient() *http.Client {
-	jar, _ := cookiejar.New(nil)
-	return &http.Client{Jar: jar, Timeout: 30 * time.Second}
 }
 
 // extractDoctorID достаёт ID врача из ссылки вида
@@ -163,8 +154,7 @@ func discoverDoctor(c *http.Client, doctorURL string) (DoctorInfo, error) {
 	if err != nil {
 		return DoctorInfo{}, fmt.Errorf("некорректная ссылка: %w", err)
 	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
+	setBrowserHeaders(req, true, pickProfile())
 	resp, err := c.Do(req)
 	if err != nil {
 		return DoctorInfo{}, fmt.Errorf("не удалось открыть страницу врача: %w", err)

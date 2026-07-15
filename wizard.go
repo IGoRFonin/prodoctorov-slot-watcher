@@ -27,11 +27,11 @@ func runWizard() (Config, error) {
 
 	fmt.Println("Похоже, это первый запуск — давайте настроимся, это займёт пару минут.")
 
-	// 1/5: врач.
+	// 1/6: врач.
 	client := newHTTPClient()
 	var doc DoctorInfo
 	for {
-		u := ask(in, "\n1/5. Вставьте ссылку на страницу врача с prodoctorov.ru\n(например, https://prodoctorov.ru/moskva/vrach/975987-hafez/):\n> ")
+		u := ask(in, "\n1/6. Вставьте ссылку на страницу врача с prodoctorov.ru\n(например, https://prodoctorov.ru/moskva/vrach/975987-hafez/):\n> ")
 		fmt.Println("Проверяю страницу...")
 		d, err := discoverDoctor(client, u)
 		if err != nil {
@@ -54,15 +54,30 @@ func runWizard() (Config, error) {
 		break
 	}
 
-	// 2/5: токен бота.
+	// 2/6: прокси для Telegram (необязательно).
+	for {
+		fmt.Println("\n2/6. Прокси для Telegram (необязательно).")
+		fmt.Println("Если Telegram у вас недоступен напрямую — укажите прокси, через который")
+		fmt.Println("ходить к api.telegram.org. Формат: socks5://127.0.0.1:1080 или")
+		fmt.Println("http://user:pass@host:port. Если не нужно — просто нажмите Enter.")
+		p := ask(in, "> ")
+		if err := validateProxyURL(p); err != nil {
+			fmt.Printf("%v\nПопробуйте ещё раз (или Enter, чтобы без прокси).\n", err)
+			continue
+		}
+		cfg.ProxyURL = p
+		break
+	}
+
+	// 3/6: токен бота.
 	var bot tgBot
 	var botUsername string
 	for {
-		fmt.Println("\n2/5. Нужен Telegram-бот, который будет слать вам уведомления.")
+		fmt.Println("\n3/6. Нужен Telegram-бот, который будет слать вам уведомления.")
 		fmt.Println("Откройте в Telegram @BotFather → отправьте /newbot → следуйте подсказкам.")
 		fmt.Println("В конце BotFather выдаст токен вида 1234567890:AA... — вставьте его сюда.")
 		t := ask(in, "> ")
-		b := tgBot{token: t}
+		b := tgBot{token: t, client: newTelegramClient(cfg.ProxyURL)}
 		username, err := b.getMe()
 		if err != nil {
 			fmt.Printf("Токен не подошёл: %v\nПопробуйте ещё раз.\n", err)
@@ -76,7 +91,7 @@ func runWizard() (Config, error) {
 	}
 
 	// 3/5: chat_id.
-	fmt.Printf("\n3/5. Откройте @%s в Telegram и нажмите «Старт» (или отправьте любое сообщение).\n", botUsername)
+	fmt.Printf("\n4/6. Откройте @%s в Telegram и нажмите «Старт» (или отправьте любое сообщение).\n", botUsername)
 	for {
 		fmt.Println("Жду ваше сообщение боту (до 2 минут)...")
 		chatID, err := bot.waitForChatID(2 * time.Minute)
@@ -94,7 +109,7 @@ func runWizard() (Config, error) {
 
 	// 4/5: интервал опроса.
 	for {
-		s := ask(in, "\n4/5. Как часто проверять расписание, в минутах? (Enter = 20, минимум 10): ")
+		s := ask(in, "\n5/6. Как часто проверять расписание, в минутах? (Enter = 20, минимум 10): ")
 		if s == "" {
 			cfg.PollMinutes = 20
 			break
@@ -110,7 +125,7 @@ func runWizard() (Config, error) {
 
 	// 5/5: время сводки.
 	for {
-		s := ask(in, "\n5/5. Во сколько присылать ежедневную сводку? (Enter = 09:00, формат ЧЧ:ММ): ")
+		s := ask(in, "\n6/6. Во сколько присылать ежедневную сводку? (Enter = 09:00, формат ЧЧ:ММ): ")
 		if s == "" {
 			s = "09:00"
 		}

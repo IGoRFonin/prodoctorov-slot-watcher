@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -28,6 +29,9 @@ type Config struct {
 	DoctorURL        string `json:"doctor_url"`
 	PollMinutes      int    `json:"poll_minutes"`
 	DigestTime       string `json:"digest_time"`
+	// ProxyURL — необязательный прокси для запросов к Telegram и prodoctorov
+	// (http/https/socks5). Пусто → прямое соединение.
+	ProxyURL string `json:"proxy_url,omitempty"`
 }
 
 var errNoConfig = errors.New("config.json не найден")
@@ -66,7 +70,29 @@ func (c Config) validate() error {
 	if !validHHMM(c.DigestTime) {
 		return errors.New("digest_time в config.json должен быть в формате ЧЧ:ММ, например 09:00")
 	}
+	if err := validateProxyURL(c.ProxyURL); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateProxyURL — пусто допустимо (прокси не используется). Иначе нужен
+// адрес со схемой http, https или socks5 и непустым хостом, например
+// socks5://127.0.0.1:1080 или http://user:pass@host:3128.
+func validateProxyURL(s string) error {
+	if s == "" {
+		return nil
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return errors.New("proxy_url в config.json должен быть адресом вида socks5://127.0.0.1:1080 или http://host:port")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5":
+		return nil
+	default:
+		return errors.New("proxy_url в config.json: поддерживаются схемы http, https или socks5")
+	}
 }
 
 func saveConfig(c Config) error {

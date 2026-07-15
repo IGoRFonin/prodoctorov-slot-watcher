@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -112,7 +113,11 @@ func TestFetchSlots(t *testing.T) {
 		URL:      srv.URL + "/vrach/975987-test/",
 		Clinics:  []Clinic{{LpuID: 70382, Timedelta: 3}},
 	}
-	slots, err := fetchSlots(newHTTPClient(), doc)
+	// Против plaintext-httptest боевой uTLS/HTTP2-клиент не работает —
+	// берём простой клиент с cookie jar (логику fetchSlots это проверяет
+	// в полном объёме, TLS-отпечаток к делу не относится).
+	jar, _ := cookiejar.New(nil)
+	slots, err := fetchSlots(&http.Client{Jar: jar}, doc)
 	if err != nil {
 		t.Fatal(err)
 	}

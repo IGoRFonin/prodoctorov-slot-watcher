@@ -72,6 +72,24 @@ func digestMessage(doc DoctorInfo, slots []freeSlot, ok bool, lastOK int64, clin
 	return msg
 }
 
+// digestSender — то, что умеет слать сообщение (в тестах подменяется заглушкой).
+type digestSender interface {
+	sendMessage(chatID, text string) error
+}
+
+// sendDigest шлёт ежедневную сводку и ВСЕГДА отмечает день отправленным —
+// даже если отправка не удалась. Сводка — некритичный сигнал «я живой» раз
+// в сутки: при недоступном Telegram повторять её каждую минуту нельзя, иначе
+// digestDue остаётся true и опрос API идёт каждую минуту → бан по частоте на
+// prodoctorov. О реальных проблемах предупреждает отдельный алерт по ошибкам.
+func sendDigest(bot digestSender, chatID string, doc DoctorInfo, slots []freeSlot, ok bool, st *state, clinics map[int]Clinic, now time.Time) {
+	msg := digestMessage(doc, slots, ok, st.LastOK, clinics)
+	if err := bot.sendMessage(chatID, msg); err != nil {
+		log.Printf("не удалось отправить ежедневную сводку: %v", err)
+	}
+	st.LastDigestDay = now.Format("2006-01-02")
+}
+
 // digestDue — пора ли слать ежедневную сводку: сегодня ещё не слали
 // и локальное время уже дошло до hhmm.
 func digestDue(now time.Time, lastDay, hhmm string) bool {
@@ -98,7 +116,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	bot := tgBot{token: cfg.TelegramBotToken}
+	bot := tgBot{token: cfg.TelegramBotToken, client: newTelegramClient(cfg.ProxyURL)}
 	client := newHTTPClient()
 	st := loadState()
 
@@ -172,12 +190,8 @@ func main() {
 	}
 
 	runDigest := func(slots []freeSlot, ok bool) {
-		msg := digestMessage(doc, slots, ok, st.LastOK, clinics)
-		// Сводку шлём и при !ok — пользователь должен узнать о проблеме.
-		if err := bot.sendMessage(cfg.TelegramChatID, msg); err == nil {
-			st.LastDigestDay = time.Now().Format("2006-01-02")
-			saveState(st)
-		}
+		sendDigest(bot, cfg.TelegramChatID, doc, slots, ok, &st, clinics, time.Now())
+		saveState(st)
 	}
 
 	slots, ok := poll() // сразу при старте

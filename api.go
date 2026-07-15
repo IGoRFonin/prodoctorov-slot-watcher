@@ -40,7 +40,7 @@ var lastGoodToken string
 
 // getCSRF делает GET страницы врача, чтобы получить свежий csrftoken
 // в cookie jar. До 2 попыток; при неудаче — кэшированный токен.
-func getCSRF(c *http.Client, pageURL string) (string, error) {
+func getCSRF(c *http.Client, pageURL string, p browserProfile) (string, error) {
 	u, err := url.Parse(pageURL)
 	if err != nil {
 		return "", fmt.Errorf("некорректный адрес страницы врача: %w", err)
@@ -49,8 +49,7 @@ func getCSRF(c *http.Client, pageURL string) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		req, _ := http.NewRequest("GET", pageURL, nil)
-		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
+		setBrowserHeaders(req, true, p)
 		resp, err := c.Do(req)
 		if err != nil {
 			lastErr = err
@@ -77,7 +76,10 @@ func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
 	if len(doc.Clinics) == 0 {
 		return nil, fmt.Errorf("у врача не найдено ни одной клиники — нечего опрашивать")
 	}
-	csrf, err := getCSRF(c, doc.URL)
+	// Один профиль на весь цикл опроса: GET-за-csrf и POST-slots_bulk
+	// идут под одной «личностью».
+	profile := pickProfile()
+	csrf, err := getCSRF(c, doc.URL, profile)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось получить csrf-токен: %w", err)
 	}
@@ -103,11 +105,10 @@ func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
 	bb, _ := json.Marshal(body)
 
 	req, _ := http.NewRequest("POST", prodoctorovBase+"/ajax/schedule/slots_bulk/", bytes.NewReader(bb))
+	setBrowserHeaders(req, false, profile)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CSRFToken", csrf)
 	req.Header.Set("X-Api-Scope", "browser")
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
 	req.Header.Set("Referer", doc.URL)
 	req.Header.Set("Origin", prodoctorovBase)
 
