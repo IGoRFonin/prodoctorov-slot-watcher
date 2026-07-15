@@ -31,7 +31,7 @@ func runWizard() (Config, error) {
 	client := newHTTPClient()
 	var doc DoctorInfo
 	for {
-		u := ask(in, "\n1/6. Вставьте ссылку на страницу врача с prodoctorov.ru\n(например, https://prodoctorov.ru/moskva/vrach/975987-hafez/):\n> ")
+		u := ask(in, "\n1/6. Вставьте ссылку на страницу врача с prodoctorov.ru\n(например, https://prodoctorov.ru/moskva/vrach/695463-maslov/):\n> ")
 		fmt.Println("Проверяю страницу...")
 		d, err := discoverDoctor(client, u)
 		if err != nil {

@@ -54,7 +54,7 @@ type addrEntry struct {
 }
 
 // extractDoctorID достаёт ID врача из ссылки вида
-// https://prodoctorov.ru/moskva/vrach/975987-hafez/
+// https://prodoctorov.ru/moskva/vrach/695463-maslov/
 func extractDoctorID(doctorURL string) (int, error) {
 	m := reDoctorID.FindStringSubmatch(doctorURL)
 	if m == nil {

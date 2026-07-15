@@ -15,7 +15,7 @@
   и не спит.
 - Telegram.
 - Ссылка на страницу вашего врача, например
-  `https://prodoctorov.ru/moskva/vrach/975987-hafez/`
+  `https://prodoctorov.ru/moskva/vrach/695463-maslov/`
   (ссылка приведена только для примера формата и не является рекомендацией
   конкретного врача).
 
