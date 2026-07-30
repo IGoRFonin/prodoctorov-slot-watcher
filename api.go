@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,37 @@ import (
 
 // prodoctorovBase подменяется в тестах.
 var prodoctorovBase = "https://prodoctorov.ru"
+
+// errAntibot — антибот prodoctorov отдал HTML-заглушку (unblock/капча) со
+// статусом 200 вместо JSON. Обёрнутая через errors.Is: по ней main.go решает,
+// что в Telegram нужен алерт с инструкцией пройти капчу в браузере.
+var errAntibot = errors.New("prodoctorov отдал проверку браузера вместо данных (нужна капча)")
+
+// Параметры ретрая POST slots_bulk при попадании на антибот-заглушку.
+// Заглушка часто «моргает» на минуты — несколько попыток с новым профилем и
+// свежим csrf её обычно пересиживают, не поднимая ложного алерта.
+// Вынесены в переменные, чтобы тесты не ждали реальных пауз.
+var (
+	antibotMaxAttempts = 3
+	antibotRetryDelay  = 3 * time.Second
+)
+
+// swapRetryDelay временно выставляет паузу ретрая (для тестов) и возвращает
+// функцию восстановления прежнего значения.
+func swapRetryDelay(d time.Duration) func() {
+	old := antibotRetryDelay
+	antibotRetryDelay = d
+	return func() { antibotRetryDelay = old }
+}
+
+// looksLikeAntibot распознаёт HTML-заглушку антибота: тело начинается с '<'
+// (HTML-документ) или Content-Type — html. Настоящий ответ API — application/json.
+func looksLikeAntibot(contentType string, body []byte) bool {
+	if strings.Contains(strings.ToLower(contentType), "html") {
+		return true
+	}
+	return bytes.HasPrefix(bytes.TrimSpace(body), []byte("<"))
+}
 
 type slotsResponse struct {
 	Result []struct {
@@ -72,16 +104,12 @@ func getCSRF(c *http.Client, pageURL string, p browserProfile) (string, error) {
 }
 
 // fetchSlots опрашивает API и возвращает все свободные слоты врача.
+// При попадании на антибот-заглушку делает до antibotMaxAttempts попыток с
+// новой «личностью» (профиль + свежий csrf): короткая заглушка так пересиживается
+// без ложного алерта. Если заглушка держится все попытки — возвращает errAntibot.
 func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
 	if len(doc.Clinics) == 0 {
 		return nil, fmt.Errorf("у врача не найдено ни одной клиники — нечего опрашивать")
-	}
-	// Один профиль на весь цикл опроса: GET-за-csrf и POST-slots_bulk
-	// идут под одной «личностью».
-	profile := pickProfile()
-	csrf, err := getCSRF(c, doc.URL, profile)
-	if err != nil {
-		return nil, fmt.Errorf("не удалось получить csrf-токен: %w", err)
 	}
 
 	type dl struct {
@@ -104,29 +132,55 @@ func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
 	}
 	bb, _ := json.Marshal(body)
 
-	req, _ := http.NewRequest("POST", prodoctorovBase+"/ajax/schedule/slots_bulk/", bytes.NewReader(bb))
-	setBrowserHeaders(req, false, profile)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-CSRFToken", csrf)
-	req.Header.Set("X-Api-Scope", "browser")
-	req.Header.Set("Referer", doc.URL)
-	req.Header.Set("Origin", prodoctorovBase)
+	var raw []byte
+	for attempt := 0; attempt < antibotMaxAttempts; attempt++ {
+		if attempt > 0 && antibotRetryDelay > 0 {
+			time.Sleep(antibotRetryDelay)
+		}
+		// Новая «личность» на каждую попытку: GET-за-csrf и POST-slots_bulk
+		// идут под одним профилем, но между попытками профиль меняется —
+		// иначе повторяем тот же подозрительный для антибота запрос.
+		profile := pickProfile()
+		csrf, err := getCSRF(c, doc.URL, profile)
+		if err != nil {
+			return nil, fmt.Errorf("не удалось получить csrf-токен: %w", err)
+		}
 
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
-	}
+		req, _ := http.NewRequest("POST", prodoctorovBase+"/ajax/schedule/slots_bulk/", bytes.NewReader(bb))
+		setBrowserHeaders(req, false, profile)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRFToken", csrf)
+		req.Header.Set("X-Api-Scope", "browser")
+		req.Header.Set("Referer", doc.URL)
+		req.Header.Set("Origin", prodoctorovBase)
 
-	var sr slotsResponse
-	if err := json.Unmarshal(raw, &sr); err != nil {
-		return nil, fmt.Errorf("не удалось разобрать ответ API: %w; тело=%s", err, truncate(string(raw), 200))
-	}
+		resp, err := c.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		raw, _ = io.ReadAll(resp.Body)
+		ct := resp.Header.Get("Content-Type")
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
+		}
+		if looksLikeAntibot(ct, raw) {
+			continue // заглушка — пробуем ещё раз новой личностью
+		}
 
+		var sr slotsResponse
+		if err := json.Unmarshal(raw, &sr); err != nil {
+			return nil, fmt.Errorf("не удалось разобрать ответ API: %w; тело=%s", err, truncate(string(raw), 200))
+		}
+		return collectFreeSlots(sr), nil
+	}
+	// Все попытки упёрлись в заглушку — это капча/затяжная блокировка.
+	return nil, fmt.Errorf("%w (после %d попыток)", errAntibot, antibotMaxAttempts)
+}
+
+// collectFreeSlots вытаскивает из ответа API только свободные слоты,
+// отсортированные по дате и времени.
+func collectFreeSlots(sr slotsResponse) []freeSlot {
 	var free []freeSlot
 	for _, d := range sr.Result {
 		for date, slots := range d.Slots {
@@ -143,7 +197,7 @@ func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
 		}
 		return free[i].Time < free[j].Time
 	})
-	return free, nil
+	return free
 }
 
 // truncate обрезает s до не более n байт, сохраняя валидность UTF-8

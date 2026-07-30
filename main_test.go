@@ -94,6 +94,32 @@ func TestDigestMessage(t *testing.T) {
 	})
 }
 
+func TestAlertMessage(t *testing.T) {
+	t.Run("антибот — инструкция про браузер и капчу", func(t *testing.T) {
+		msg := alertMessage(3, errAntibot)
+		low := strings.ToLower(msg)
+		if !strings.Contains(low, "браузер") {
+			t.Errorf("нет упоминания браузера: %q", msg)
+		}
+		if !strings.Contains(low, "капч") {
+			t.Errorf("нет упоминания капчи: %q", msg)
+		}
+		if !strings.Contains(msg, "3") {
+			t.Errorf("нет числа ошибок подряд: %q", msg)
+		}
+	})
+
+	t.Run("обычная ошибка — без инструкции про капчу", func(t *testing.T) {
+		msg := alertMessage(3, fmt.Errorf("HTTP 502: bad gateway"))
+		if strings.Contains(strings.ToLower(msg), "капч") {
+			t.Errorf("для обычной ошибки не должно быть инструкции про капчу: %q", msg)
+		}
+		if !strings.Contains(msg, "502") {
+			t.Errorf("нет текста исходной ошибки: %q", msg)
+		}
+	})
+}
+
 func TestDigestDue(t *testing.T) {
 	loc := time.FixedZone("MSK", 3*3600)
 	at := func(h, m int) time.Time { return time.Date(2026, 7, 13, h, m, 0, 0, loc) }

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"unicode/utf8"
 )
@@ -123,5 +125,89 @@ func TestFetchSlots(t *testing.T) {
 	}
 	if len(slots) != 1 || slots[0].Time != "08:00" || slots[0].Lpu != 70382 {
 		t.Fatalf("слоты: %+v, ожидался один свободный 08:00", slots)
+	}
+}
+
+// antibotBody — типичная HTML-заглушка антибота prodoctorov (unblock/капча),
+// которую сайт периодически отдаёт со статусом 200 вместо JSON.
+const antibotBody = `<!DOCTYPE html>
+<html lang="ru"><head><meta charset="UTF-8"><meta name="robots" content="noindex"></head>
+<body>Проверка браузера…</body></html>`
+
+func testDoctor(base string) DoctorInfo {
+	return DoctorInfo{
+		DoctorID: 975987,
+		URL:      base + "/vrach/975987-test/",
+		Clinics:  []Clinic{{LpuID: 70382, Timedelta: 3}},
+	}
+}
+
+// Периодическая заглушка антибота: первые попытки — HTML, затем JSON.
+// fetchSlots должен пересидеть заглушку ретраями и вернуть слоты.
+func TestFetchSlotsAntibotRetrySucceeds(t *testing.T) {
+	defer swapRetryDelay(0)()
+	var posts int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/vrach/", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: "tok123", Path: "/"})
+	})
+	mux.HandleFunc("/ajax/schedule/slots_bulk/", func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&posts, 1) < 3 { // первые две попытки — заглушка
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write([]byte(antibotBody))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"result":[{"doctor_id":975987,"lpu_id":70382,"slots":{"2026-07-30":[{"time":"08:00","free":true,"duration":30}]}}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	oldBase := prodoctorovBase
+	prodoctorovBase = srv.URL
+	defer func() { prodoctorovBase = oldBase }()
+
+	jar, _ := cookiejar.New(nil)
+	slots, err := fetchSlots(&http.Client{Jar: jar}, testDoctor(srv.URL))
+	if err != nil {
+		t.Fatalf("ретрай не пересидел заглушку: %v", err)
+	}
+	if len(slots) != 1 || slots[0].Time != "08:00" {
+		t.Fatalf("слоты: %+v, ожидался один свободный 08:00", slots)
+	}
+	if posts < 3 {
+		t.Fatalf("ожидалось ≥3 POST-попыток, было %d", posts)
+	}
+}
+
+// Затяжная блокировка (капча): заглушка на всех попытках. fetchSlots должен
+// вернуть errAntibot, а НЕ сырую ошибку разбора JSON.
+func TestFetchSlotsAntibotAllFail(t *testing.T) {
+	defer swapRetryDelay(0)()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/vrach/", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: "tok123", Path: "/"})
+	})
+	mux.HandleFunc("/ajax/schedule/slots_bulk/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(antibotBody))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	oldBase := prodoctorovBase
+	prodoctorovBase = srv.URL
+	defer func() { prodoctorovBase = oldBase }()
+
+	jar, _ := cookiejar.New(nil)
+	_, err := fetchSlots(&http.Client{Jar: jar}, testDoctor(srv.URL))
+	if err == nil {
+		t.Fatal("ожидалась ошибка при постоянной заглушке")
+	}
+	if !errors.Is(err, errAntibot) {
+		t.Fatalf("ожидалась errAntibot, получили: %v", err)
+	}
+	if strings.Contains(err.Error(), "invalid character") {
+		t.Errorf("сырая ошибка JSON вместо понятной про антибот: %v", err)
 	}
 }

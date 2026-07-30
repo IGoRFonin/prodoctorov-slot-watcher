@@ -72,6 +72,24 @@ func digestMessage(doc DoctorInfo, slots []freeSlot, ok bool, lastOK int64, clin
 	return msg
 }
 
+// alertMessage — текст алерта после errAlertThreshold неудачных опросов подряд.
+// Если причина — антибот-заглушка (капча), даёт конкретную инструкцию: бот сам
+// капчу пройти не может, нужно вмешательство человека с браузером.
+func alertMessage(consec int, lastErr error) string {
+	if errors.Is(lastErr, errAntibot) {
+		return fmt.Sprintf(
+			"⚠️ Мониторинг не получает данные: %d ошибок подряд.\n"+
+				"Причина: prodoctorov просит пройти проверку (капчу).\n"+
+				"Что сделать: с компьютера откройте страницу врача в браузере и пройдите капчу — "+
+				"после этого сайт снова начнёт отдавать данные.\n"+
+				"Пока проверка не пройдена, я могу не увидеть появление записи.",
+			consec)
+	}
+	return fmt.Sprintf(
+		"⚠️ Мониторинг не получает данные: %d ошибок подряд.\nПоследняя: %s\nМогу не увидеть появление записи.",
+		consec, truncate(lastErr.Error(), 200))
+}
+
 // digestSender — то, что умеет слать сообщение (в тестах подменяется заглушкой).
 type digestSender interface {
 	sendMessage(chatID, text string) error
@@ -150,9 +168,7 @@ func main() {
 			st.ConsecErrors++
 			log.Printf("ошибка опроса (#%d подряд): %v", st.ConsecErrors, err)
 			if st.ConsecErrors >= errAlertThreshold && !st.ErrAlerted {
-				if e := bot.sendMessage(cfg.TelegramChatID, fmt.Sprintf(
-					"⚠️ Мониторинг не получает данные: %d ошибок подряд.\nПоследняя: %s\nМогу не увидеть появление записи.",
-					st.ConsecErrors, truncate(err.Error(), 200))); e == nil {
+				if e := bot.sendMessage(cfg.TelegramChatID, alertMessage(st.ConsecErrors, err)); e == nil {
 					st.ErrAlerted = true
 				}
 			}
