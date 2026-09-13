@@ -23,21 +23,16 @@ func TestProbeLive(t *testing.T) {
 	client := newHTTPClient()
 	prof := browserProfiles[0]
 
-	// 1) GET страницы врача (uTLS Chrome_133 + h2)
-	csrf, err := getCSRF(client, pageURL, prof)
-	if err != nil {
-		t.Fatalf("getCSRF: %v", err)
-	}
-	t.Logf("csrf=%q", csrf)
-
-	// 2) Автоопределение врача, чтобы собрать реальные doctor_id/lpu.
+	// 1) Автоопределение врача: GET страницы (uTLS + h2) и разбор.
+	//    Заодно это проверка, что мы не попали на антибот-заглушку.
 	doc, err := discoverDoctor(client, pageURL)
 	if err != nil {
 		t.Fatalf("discoverDoctor: %v", err)
 	}
 	t.Logf("doctor: id=%d name=%s clinics=%d", doc.DoctorID, doc.Name, len(doc.Clinics))
 
-	// 3) Ровно тот же POST, что и в fetchSlots, но печатаем сырой ответ.
+	// 2) Ровно тот же POST, что и в fetchSlots, но печатаем сырой ответ.
+	//    Ни cookie, ни X-CSRFToken не шлём — API их не требует.
 	type dl struct {
 		DoctorID     int  `json:"doctor_id"`
 		LpuID        int  `json:"lpu_id"`
@@ -58,7 +53,6 @@ func TestProbeLive(t *testing.T) {
 	req, _ := http.NewRequest("POST", prodoctorovBase+"/ajax/schedule/slots_bulk/", bytes.NewReader(bb))
 	setBrowserHeaders(req, false, prof)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-CSRFToken", csrf)
 	req.Header.Set("X-Api-Scope", "browser")
 	req.Header.Set("Referer", doc.URL)
 	req.Header.Set("Origin", prodoctorovBase)

@@ -84,26 +84,35 @@ func pickProfile() browserProfile {
 // setBrowserHeaders навешивает заголовки как у настоящего браузера, чтобы
 // пройти антибот-WAF prodoctorov. Профиль (UA + Client Hints) передаётся
 // снаружи, чтобы все запросы одного цикла шли согласованно.
-// navigate=true — переход по ссылке (страница врача), false — XHR к API.
+// htmlPage=true — запрос HTML-страницы врача, false — запрос к JSON-API.
+//
+// Оба вида запросов идут как XHR (X-Requested-With + Sec-Fetch-Dest: empty).
+// Это не косметика, а условие работоспособности: антибот ServicePipe подменяет
+// JS-заглушкой только навигационные запросы (Sec-Fetch-Dest: document), а XHR
+// к тому же самому адресу отдаёт как есть. Заглушку пройти без браузера нельзя
+// (368 КБ обфусцированного JS считает отпечаток в Web Workers), поэтому мы под
+// неё просто не попадаем. Проверено 13.09.2026: навигационные заголовки — 0/3
+// настоящих ответов, XHR-заголовки — 3/3.
+//
 // Accept-Encoding НЕ трогаем: иначе Go перестанет сам распаковывать gzip.
-func setBrowserHeaders(req *http.Request, navigate bool, p browserProfile) {
+func setBrowserHeaders(req *http.Request, htmlPage bool, p browserProfile) {
 	req.Header.Set("User-Agent", p.ua)
 	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
 	req.Header.Set("sec-ch-ua", p.secCHUA)
 	req.Header.Set("sec-ch-ua-mobile", "?0")
 	req.Header.Set("sec-ch-ua-platform", p.platform)
-	if navigate {
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	if htmlPage {
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-		req.Header.Set("Upgrade-Insecure-Requests", "1")
-		req.Header.Set("Sec-Fetch-Dest", "document")
-		req.Header.Set("Sec-Fetch-Mode", "navigate")
-		req.Header.Set("Sec-Fetch-Site", "none")
-		req.Header.Set("Sec-Fetch-User", "?1")
+		// Referer обязателен: без него ServicePipe отдаёт заглушку даже на XHR
+		// (проверено — 0/3 против 3/3). Подойдёт любой адрес того же сайта,
+		// берём корень: запрос выглядит как переход с главной.
+		req.Header.Set("Referer", req.URL.Scheme+"://"+req.URL.Host+"/")
 	} else {
 		req.Header.Set("Accept", "application/json, text/plain, */*")
-		req.Header.Set("Sec-Fetch-Dest", "empty")
-		req.Header.Set("Sec-Fetch-Mode", "cors")
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		// Referer для API-запроса ставит вызывающий — это страница врача.
 	}
 }

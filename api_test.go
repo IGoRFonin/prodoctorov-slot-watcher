@@ -93,13 +93,19 @@ func TestTruncateShortASCIIUnchanged(t *testing.T) {
 }
 
 func TestFetchSlots(t *testing.T) {
+	var pageHits int32
 	mux := http.NewServeMux()
+	// Страницу врача опрос трогать не должен: она под антибот-заглушкой,
+	// а API работает без csrf-токена. Обращение сюда — регрессия.
 	mux.HandleFunc("/vrach/", func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: "tok123", Path: "/"})
+		atomic.AddInt32(&pageHits, 1)
 	})
 	mux.HandleFunc("/ajax/schedule/slots_bulk/", func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-CSRFToken"); got != "tok123" {
-			t.Errorf("X-CSRFToken = %q, ожидалось tok123", got)
+		if got := r.Header.Get("X-CSRFToken"); got != "" {
+			t.Errorf("X-CSRFToken = %q, а токен слать не нужно — API его не требует", got)
+		}
+		if got := r.Header.Get("X-Requested-With"); got != "XMLHttpRequest" {
+			t.Errorf("X-Requested-With = %q, ожидалось XMLHttpRequest", got)
 		}
 		w.Write([]byte(`{"result":[{"doctor_id":975987,"lpu_id":70382,"slots":{"2026-07-30":[{"time":"08:00","free":true,"duration":30},{"time":"09:00","free":false,"duration":30}]}}]}`))
 	})
@@ -126,6 +132,9 @@ func TestFetchSlots(t *testing.T) {
 	if len(slots) != 1 || slots[0].Time != "08:00" || slots[0].Lpu != 70382 {
 		t.Fatalf("слоты: %+v, ожидался один свободный 08:00", slots)
 	}
+	if pageHits != 0 {
+		t.Errorf("опрос сходил на страницу врача %d раз — она под антибот-заглушкой, ходить туда нельзя", pageHits)
+	}
 }
 
 // antibotBody — типичная HTML-заглушка антибота prodoctorov (unblock/капча),
@@ -148,9 +157,6 @@ func TestFetchSlotsAntibotRetrySucceeds(t *testing.T) {
 	defer swapRetryDelay(0)()
 	var posts int32
 	mux := http.NewServeMux()
-	mux.HandleFunc("/vrach/", func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: "tok123", Path: "/"})
-	})
 	mux.HandleFunc("/ajax/schedule/slots_bulk/", func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&posts, 1) < 3 { // первые две попытки — заглушка
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -185,9 +191,6 @@ func TestFetchSlotsAntibotRetrySucceeds(t *testing.T) {
 func TestFetchSlotsAntibotAllFail(t *testing.T) {
 	defer swapRetryDelay(0)()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/vrach/", func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: "tok123", Path: "/"})
-	})
 	mux.HandleFunc("/ajax/schedule/slots_bulk/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(antibotBody))

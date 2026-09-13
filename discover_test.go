@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -56,5 +59,63 @@ func TestParseDoctorPage(t *testing.T) {
 	}
 	if c1.Phone == "" {
 		t.Error("телефон клиники 70382 пуст")
+	}
+}
+
+// Антибот-заглушка приходит как HTML со статусом 200 — парсер принял бы её за
+// перекроенную вёрстку и выдал бы «сайт изменил вёрстку». discoverDoctor должен
+// назвать настоящую причину (errAntibot), иначе алерт уводит в ложную сторону.
+func TestDiscoverDoctorDetectsChallenge(t *testing.T) {
+	const challenge = `<!DOCTYPE html><html><head>
+<script src="https://servicepipe.tech/loaders/abc.js" async></script>
+</head><body><div id="id_spinner"></div></body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(challenge))
+	}))
+	defer srv.Close()
+
+	_, err := discoverDoctor(srv.Client(), srv.URL+"/moskva/vrach/975987-test/")
+	if err == nil {
+		t.Fatal("ожидалась ошибка на антибот-заглушке")
+	}
+	if !errors.Is(err, errAntibot) {
+		t.Fatalf("ожидалась errAntibot, получили: %v", err)
+	}
+	if strings.Contains(err.Error(), "вёрстк") {
+		t.Errorf("ошибка винит вёрстку вместо антибота: %v", err)
+	}
+}
+
+// Настоящая страница врача — тоже HTML, и её проверка на заглушку пропускать
+// не должна: иначе фикс сломает рабочий путь.
+func TestDiscoverDoctorAcceptsRealPage(t *testing.T) {
+	page := `<html><head><title>Тестовый Врач, стоматолог - отзывы</title></head><body>
+<schedule-widget town-timedelta="3" lpu-with-appointment-ids="[70382]"></schedule-widget>
+</body></html>`
+
+	var gotXHR, gotReferer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotXHR, gotReferer = r.Header.Get("X-Requested-With"), r.Header.Get("Referer")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(page))
+	}))
+	defer srv.Close()
+
+	info, err := discoverDoctor(srv.Client(), srv.URL+"/moskva/vrach/975987-test/")
+	if err != nil {
+		t.Fatalf("настоящая страница отвергнута: %v", err)
+	}
+	if info.Name != "Тестовый Врач" || len(info.Clinics) != 1 || info.Clinics[0].LpuID != 70382 {
+		t.Fatalf("разбор страницы: %+v", info)
+	}
+	// Эти два заголовка — единственное, что уводит запрос из-под антибот-заглушки
+	// ServicePipe. Потеряем любой из них — мониторинг снова ослепнет, причём молча.
+	if gotXHR != "XMLHttpRequest" {
+		t.Errorf("X-Requested-With = %q, ожидалось XMLHttpRequest — без него придёт заглушка", gotXHR)
+	}
+	if gotReferer == "" {
+		t.Error("Referer пуст — без него ServicePipe отдаёт заглушку даже на XHR")
 	}
 }

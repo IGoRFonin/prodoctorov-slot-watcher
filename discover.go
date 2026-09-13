@@ -167,6 +167,12 @@ func discoverDoctor(c *http.Client, doctorURL string) (DoctorInfo, error) {
 	if err != nil {
 		return DoctorInfo{}, err
 	}
+	// Антибот-заглушка — это тоже HTML со статусом 200, и парсер принял бы её
+	// за перекроенную вёрстку. Проверяем явно, чтобы ошибка называла настоящую
+	// причину и main.go поднял алерт про антибот, а не про разметку.
+	if looksLikeChallenge(b) {
+		return DoctorInfo{}, fmt.Errorf("страница врача: %w", errAntibot)
+	}
 	info, err := parseDoctorPage(string(b), id)
 	if err != nil {
 		return DoctorInfo{}, err

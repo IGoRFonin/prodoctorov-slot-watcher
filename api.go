@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -23,8 +22,8 @@ var prodoctorovBase = "https://prodoctorov.ru"
 var errAntibot = errors.New("prodoctorov отдал проверку браузера вместо данных (нужна капча)")
 
 // Параметры ретрая POST slots_bulk при попадании на антибот-заглушку.
-// Заглушка часто «моргает» на минуты — несколько попыток с новым профилем и
-// свежим csrf её обычно пересиживают, не поднимая ложного алерта.
+// Заглушка часто «моргает» на минуты — несколько попыток с новым профилем
+// её обычно пересиживают, не поднимая ложного алерта.
 // Вынесены в переменные, чтобы тесты не ждали реальных пауз.
 var (
 	antibotMaxAttempts = 3
@@ -39,13 +38,22 @@ func swapRetryDelay(d time.Duration) func() {
 	return func() { antibotRetryDelay = old }
 }
 
-// looksLikeAntibot распознаёт HTML-заглушку антибота: тело начинается с '<'
-// (HTML-документ) или Content-Type — html. Настоящий ответ API — application/json.
+// looksLikeAntibot распознаёт HTML-заглушку антибота в ответе JSON-API: тело
+// начинается с '<' (HTML-документ) или Content-Type — html. Настоящий ответ
+// API — application/json. Годится ТОЛЬКО для ответов API: страница врача сама
+// по себе HTML, для неё есть looksLikeChallenge.
 func looksLikeAntibot(contentType string, body []byte) bool {
 	if strings.Contains(strings.ToLower(contentType), "html") {
 		return true
 	}
 	return bytes.HasPrefix(bytes.TrimSpace(body), []byte("<"))
+}
+
+// looksLikeChallenge распознаёт JS-заглушку антибота на месте HTML-страницы.
+// Отличить по «это HTML» нельзя — настоящая страница врача тоже HTML, поэтому
+// ищем загрузчик ServicePipe, который есть только в заглушке.
+func looksLikeChallenge(body []byte) bool {
+	return bytes.Contains(bytes.ToLower(body), []byte("servicepipe"))
 }
 
 type slotsResponse struct {
@@ -66,47 +74,16 @@ type freeSlot struct {
 	Time string
 }
 
-// lastGoodToken — кэш последнего рабочего csrftoken на случай, если
-// очередной GET за токеном не удастся.
-var lastGoodToken string
-
-// getCSRF делает GET страницы врача, чтобы получить свежий csrftoken
-// в cookie jar. До 2 попыток; при неудаче — кэшированный токен.
-func getCSRF(c *http.Client, pageURL string, p browserProfile) (string, error) {
-	u, err := url.Parse(pageURL)
-	if err != nil {
-		return "", fmt.Errorf("некорректный адрес страницы врача: %w", err)
-	}
-	base := &url.URL{Scheme: u.Scheme, Host: u.Host}
-	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		req, _ := http.NewRequest("GET", pageURL, nil)
-		setBrowserHeaders(req, true, p)
-		resp, err := c.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		for _, ck := range c.Jar.Cookies(base) {
-			if ck.Name == "csrftoken" && ck.Value != "" {
-				lastGoodToken = ck.Value
-				return ck.Value, nil
-			}
-		}
-		lastErr = fmt.Errorf("csrftoken не найден в ответе")
-	}
-	if lastGoodToken != "" {
-		return lastGoodToken, nil
-	}
-	return "", lastErr
-}
-
 // fetchSlots опрашивает API и возвращает все свободные слоты врача.
 // При попадании на антибот-заглушку делает до antibotMaxAttempts попыток с
-// новой «личностью» (профиль + свежий csrf): короткая заглушка так пересиживается
-// без ложного алерта. Если заглушка держится все попытки — возвращает errAntibot.
+// новой «личностью» (профилем): короткая заглушка так пересиживается без
+// ложного алерта. Если заглушка держится все попытки — возвращает errAntibot.
+//
+// csrf-токен и cookie здесь не нужны: slots_bulk отдаёт данные по одним только
+// браузерным заголовкам (проверено 13.09.2026 — 8 из 8 запросов с пустым cookie
+// jar и без X-CSRFToken вернули настоящий JSON). Раньше перед каждым POST шёл
+// GET страницы врача ради токена — именно этот GET упирался в антибот-заглушку
+// и ронял весь опрос, хотя охраняемый им POST в токене не нуждался.
 func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
 	if len(doc.Clinics) == 0 {
 		return nil, fmt.Errorf("у врача не найдено ни одной клиники — нечего опрашивать")
@@ -137,19 +114,13 @@ func fetchSlots(c *http.Client, doc DoctorInfo) ([]freeSlot, error) {
 		if attempt > 0 && antibotRetryDelay > 0 {
 			time.Sleep(antibotRetryDelay)
 		}
-		// Новая «личность» на каждую попытку: GET-за-csrf и POST-slots_bulk
-		// идут под одним профилем, но между попытками профиль меняется —
-		// иначе повторяем тот же подозрительный для антибота запрос.
+		// Новая «личность» на каждую попытку — иначе повторяем тот же
+		// подозрительный для антибота запрос.
 		profile := pickProfile()
-		csrf, err := getCSRF(c, doc.URL, profile)
-		if err != nil {
-			return nil, fmt.Errorf("не удалось получить csrf-токен: %w", err)
-		}
 
 		req, _ := http.NewRequest("POST", prodoctorovBase+"/ajax/schedule/slots_bulk/", bytes.NewReader(bb))
 		setBrowserHeaders(req, false, profile)
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-CSRFToken", csrf)
 		req.Header.Set("X-Api-Scope", "browser")
 		req.Header.Set("Referer", doc.URL)
 		req.Header.Set("Origin", prodoctorovBase)
