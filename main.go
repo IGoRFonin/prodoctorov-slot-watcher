@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -23,6 +24,7 @@ type state struct {
 	LastOK        int64       `json:"last_ok"`
 	ErrAlerted    bool        `json:"err_alerted"`
 	CachedDoctor  *DoctorInfo `json:"cached_doctor,omitempty"`
+	LastDiscover  int64       `json:"last_discover,omitempty"`
 }
 
 const stateFileName = "state.json"
@@ -122,6 +124,26 @@ func digestDue(now time.Time, lastDay, hhmm string) bool {
 	return !now.Before(at)
 }
 
+// rediscoverInterval — как часто перечитывать страницу врача. Список клиник
+// на странице временами «мигает»: 05.10.2026 одна из двух клиник пропала,
+// watcher перезапустился в этот момент и неделю опрашивал только оставшуюся.
+const rediscoverInterval = 72 * time.Hour
+
+// rediscoverDue — пора ли заново определить врача и его клиники.
+func rediscoverDue(now time.Time, lastDiscover int64) bool {
+	return now.Sub(time.Unix(lastDiscover, 0)) >= rediscoverInterval
+}
+
+// clinicIDs — отсортированные id клиник для сравнения и лога.
+func clinicIDs(doc DoctorInfo) string {
+	ids := make([]int, 0, len(doc.Clinics))
+	for _, c := range doc.Clinics {
+		ids = append(ids, c.LpuID)
+	}
+	sort.Ints(ids)
+	return fmt.Sprint(ids)
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags)
 
@@ -151,12 +173,40 @@ func main() {
 		_ = bot.sendMessage(cfg.TelegramChatID, "⚠️ Не удалось обновить данные врача со страницы — работаю на сохранённых. Если это повторяется при каждом запуске, проверьте ссылку в config.json.")
 	} else {
 		st.CachedDoctor = &doc
+		st.LastDiscover = time.Now().Unix()
 		saveState(st)
 	}
 
 	clinics := map[int]Clinic{}
-	for _, c := range doc.Clinics {
-		clinics[c.LpuID] = c
+	setClinics := func() {
+		clinics = map[int]Clinic{}
+		for _, c := range doc.Clinics {
+			clinics[c.LpuID] = c
+		}
+	}
+	setClinics()
+
+	// rediscover раз в rediscoverInterval перечитывает страницу врача. При
+	// неудаче работаем на прежних данных и пробуем снова на следующем опросе.
+	rediscover := func() {
+		if !rediscoverDue(time.Now(), st.LastDiscover) {
+			return
+		}
+		fresh, err := discoverDoctor(client, cfg.DoctorURL)
+		if err != nil {
+			log.Printf("переопределение клиник не удалось (%v), работаю на прежних", err)
+			return
+		}
+		if old, now := clinicIDs(doc), clinicIDs(fresh); old != now {
+			log.Printf("список клиник изменился: %s → %s", old, now)
+		} else {
+			log.Printf("переопределение клиник: без изменений, %s", now)
+		}
+		doc = fresh
+		setClinics()
+		st.CachedDoctor = &fresh
+		st.LastDiscover = time.Now().Unix()
+		saveState(st)
 	}
 	log.Printf("watcher старт: %s (id %d), клиник: %d, опрос каждые %d мин, сводка в %s",
 		doc.Name, doc.DoctorID, len(doc.Clinics), cfg.PollMinutes, cfg.DigestTime)
@@ -222,6 +272,7 @@ func main() {
 	for {
 		select {
 		case <-pollTicker.C:
+			rediscover()
 			poll()
 		case <-digestTicker.C:
 			if digestDue(time.Now(), st.LastDigestDay, cfg.DigestTime) {

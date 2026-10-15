@@ -140,3 +140,23 @@ func TestDigestDue(t *testing.T) {
 		t.Error("кривое время — не слать")
 	}
 }
+
+func TestRediscoverDue(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.Local)
+	if !rediscoverDue(now, 0) {
+		t.Fatal("ни разу не определяли — пора")
+	}
+	if rediscoverDue(now, now.Add(-71*time.Hour).Unix()) {
+		t.Fatal("71 час назад — ещё рано")
+	}
+	if !rediscoverDue(now, now.Add(-72*time.Hour).Unix()) {
+		t.Fatal("72 часа назад — пора")
+	}
+}
+
+func TestClinicIDs(t *testing.T) {
+	doc := DoctorInfo{Clinics: []Clinic{{LpuID: 70382}, {LpuID: 39025}}}
+	if got := clinicIDs(doc); got != "[39025 70382]" {
+		t.Fatalf("clinicIDs = %q", got)
+	}
+}
